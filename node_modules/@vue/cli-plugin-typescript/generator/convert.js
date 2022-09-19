@@ -1,11 +1,12 @@
-module.exports = (api, { convertJsToTs = true } = {}) => {
+module.exports = (api, { tsLint = false, convertJsToTs = true } = {}) => {
   const jsRE = /\.js$/
   let excludeRE = /^tests\/e2e\/|(\.config|rc)\.js$/
 
   if (api.hasPlugin('e2e-webdriverio')) {
     excludeRE = /(\.config|rc)\.js$/
   }
-  api.postProcessFiles((files) => {
+  const convertLintFlags = require('../lib/convertLintFlags')
+  api.postProcessFiles(files => {
     if (convertJsToTs) {
       // delete all js files that have a ts file of the same name
       // and simply rename other js files to ts
@@ -13,7 +14,10 @@ module.exports = (api, { convertJsToTs = true } = {}) => {
         if (jsRE.test(file) && !excludeRE.test(file)) {
           const tsFile = file.replace(jsRE, '.ts')
           if (!files[tsFile]) {
-            const content = files[file]
+            let content = files[file]
+            if (tsLint) {
+              content = convertLintFlags(content)
+            }
             files[tsFile] = content
           }
           delete files[file]
@@ -22,7 +26,10 @@ module.exports = (api, { convertJsToTs = true } = {}) => {
     } else {
       // rename only main file to main.ts
       const tsFile = api.entryFile.replace(jsRE, '.ts')
-      const content = files[api.entryFile]
+      let content = files[api.entryFile]
+      if (tsLint) {
+        content = convertLintFlags(content)
+      }
       files[tsFile] = content
       delete files[api.entryFile]
     }

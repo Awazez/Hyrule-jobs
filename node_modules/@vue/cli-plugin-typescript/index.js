@@ -1,7 +1,12 @@
 const path = require('path')
 
 module.exports = (api, projectOptions) => {
+  const fs = require('fs')
   const useThreads = process.env.NODE_ENV === 'production' && !!projectOptions.parallel
+
+  const { semver, loadModule } = require('@vue/cli-shared-utils')
+  const vue = loadModule('vue', api.service.context)
+  const isVue3 = (vue && semver.major(vue.version) === 3)
 
   api.chainWebpack(config => {
     config.resolveLoader.modules.prepend(path.join(__dirname, 'node_modules'))
@@ -26,19 +31,15 @@ module.exports = (api, projectOptions) => {
       tsxRule.use(name).loader(loader).options(options)
     }
 
-    try {
-      const cacheLoaderPath = require.resolve('cache-loader')
-
-      addLoader({
-        name: 'cache-loader',
-        loader: cacheLoaderPath,
-        options: api.genCacheConfig('ts-loader', {
-          'ts-loader': require('ts-loader/package.json').version,
-          'typescript': require('typescript/package.json').version,
-          modern: !!process.env.VUE_CLI_MODERN_BUILD
-        }, 'tsconfig.json')
-      })
-    } catch (e) {}
+    addLoader({
+      name: 'cache-loader',
+      loader: require.resolve('cache-loader'),
+      options: api.genCacheConfig('ts-loader', {
+        'ts-loader': require('ts-loader/package.json').version,
+        'typescript': require('typescript/package.json').version,
+        modern: !!process.env.VUE_CLI_MODERN_BUILD
+      }, 'tsconfig.json')
+    })
 
     if (useThreads) {
       addLoader({
@@ -53,7 +54,11 @@ module.exports = (api, projectOptions) => {
 
     if (api.hasPlugin('babel')) {
       addLoader({
+        // TODO: I guess the intent is to require the `babel-loader` provided by the Babel vue
+        // plugin, but that means we now rely on the hoisting. It should instead be queried
+        // against the plugin itself, or through a peer dependency.
         name: 'babel-loader',
+        // eslint-disable-next-line node/no-extraneous-require
         loader: require.resolve('babel-loader')
       })
     }
@@ -78,32 +83,50 @@ module.exports = (api, projectOptions) => {
     // this plugin does not play well with jest + cypress setup (tsPluginE2e.spec.js) somehow
     // so temporarily disabled for vue-cli tests
     if (!process.env.VUE_CLI_TEST) {
-      let vueCompilerPath
-      try {
-        // Vue 2.7+
-        vueCompilerPath = require.resolve('vue/compiler-sfc')
-      } catch (e) {
-        // Vue 2.6 and lower versions
-        vueCompilerPath = require.resolve('vue-template-compiler')
-      }
-
-      config
-        .plugin('fork-ts-checker')
-        .use(require('fork-ts-checker-webpack-plugin'), [{
-          typescript: {
-            extensions: {
-              vue: {
-                enabled: true,
-                compiler: vueCompilerPath
+      if (isVue3) {
+        config
+          .plugin('fork-ts-checker')
+          .use(require('fork-ts-checker-webpack-plugin-v5'), [{
+            typescript: {
+              extensions: {
+                vue: {
+                  enabled: true,
+                  compiler: '@vue/compiler-sfc'
+                }
+              },
+              diagnosticOptions: {
+                semantic: true,
+                // https://github.com/TypeStrong/ts-loader#happypackmode
+                syntactic: useThreads
               }
-            },
-            diagnosticOptions: {
-              semantic: true,
-              // https://github.com/TypeStrong/ts-loader#happypackmode
-              syntactic: useThreads
             }
-          }
-        }])
+          }])
+      } else {
+        config
+          .plugin('fork-ts-checker')
+            .use(require('fork-ts-checker-webpack-plugin'), [{
+              vue: { enabled: true, compiler: 'vue-template-compiler' },
+              tslint: projectOptions.lintOnSave !== false && fs.existsSync(api.resolve('tslint.json')),
+              formatter: 'codeframe',
+              // https://github.com/TypeStrong/ts-loader#happypackmode-boolean-defaultfalse
+              checkSyntacticErrors: useThreads
+            }])
+      }
     }
   })
+
+  if (!api.hasPlugin('eslint')) {
+    api.registerCommand('lint', {
+      description: 'lint source files with TSLint',
+      usage: 'vue-cli-service lint [options] [...files]',
+      options: {
+        '--format [formatter]': 'specify formatter (default: codeFrame)',
+        '--no-fix': 'do not fix errors',
+        '--formatters-dir [dir]': 'formatter directory',
+        '--rules-dir [dir]': 'rules directory'
+      }
+    }, args => {
+      return require('./lib/tslint')(args, api)
+    })
+  }
 }
