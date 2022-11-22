@@ -52,6 +52,7 @@ export default defineComponent({
   .job-list ul {
     padding: 0
   }
+  
   .job-list li {
     list-style-type: none;
     background: white;
